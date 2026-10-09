@@ -1,0 +1,58 @@
+name: Backend CI
+
+on:
+    push:
+        branches:
+            - main
+            - dev
+        paths:
+            - 'backend/**'
+            - '.github/workflows/backend-ci.yml'
+
+    pull_request:
+        branches:
+            - main
+            - dev
+        paths:
+            - 'backend/**'
+            - '.github/workflows/backend-ci.yml'
+
+jobs:
+    backend-check:
+        runs-on: ubuntu-latest
+
+        defaults:
+            run:
+                working-directory: backend
+
+        env:
+            DATABASE_URL: postgresql://docmind:123456@localhost:5432/docmind?schema=public
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: npm
+                  cache-dependency-path: backend/package-lock.json
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Check formatting
+              run: npm run format:check
+
+            - name: Generate Prisma client
+              run: npm run db:gen
+
+            - name: Check ESLint
+              run: npm run lint
+
+            - name: Validate Prisma schema
+              run: npx prisma validate
+
+            - name: Build backend
+              run: npm run build
