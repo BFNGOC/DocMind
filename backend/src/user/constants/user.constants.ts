@@ -4,6 +4,7 @@ export const USER_SELECT = {
   email: true,
   role: true,
   avatarUrl: true,
+  lastLogin: true,
   createdAt: true,
   updatedAt: true,
 };

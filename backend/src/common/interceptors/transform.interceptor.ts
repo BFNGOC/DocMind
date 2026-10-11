@@ -28,7 +28,7 @@ export class TransformInterceptor<T> implements NestInterceptor<
     return next.handle().pipe(
       map((data) => ({
         statusCode,
-        message: data?.message || 'Request processed successfully',
+        message: data?.message || 'Yêu cầu đã được xử lý thành công.',
         // Nếu data có thuộc tính message riêng thì tách ra, còn lại đẩy vào ô data
         data:
           data && data.message && Object.keys(data).length === 1
