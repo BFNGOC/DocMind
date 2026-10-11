@@ -1,4 +1,8 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService, type JwtSignOptions } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
@@ -9,6 +13,7 @@ import { RegisterDto } from './dto/register.dto';
 import { USER_SELECT } from 'src/user/constants/user.constants';
 import { UserRole } from 'src/generated/prisma/enums';
 import { UserService } from 'src/user/user.service';
+import { LogoutDto } from './dto/logout.dto';
 
 @Injectable()
 export class AuthService {
@@ -90,11 +95,39 @@ export class AuthService {
       throw new UnauthorizedException('Tài khoản hoặc mật khẩu không đúng');
     }
 
-    const tokens = await this.generateTokens(user.id, user.email, user.role);
+    // 1. Tìm các session đang active của user, sắp xếp từ cũ nhất đến mới nhất
+    const activeSessions = await this.prisma.authSession.findMany({
+      where: {
+        userId: user.id,
+        revokedAt: null,
+      },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
+    });
 
+    const operations: any[] = [];
+
+    // 2. Nếu đã có từ 3 session trở lên, chuẩn bị lệnh xóa (thu hồi) những cái cũ nhất
+    if (activeSessions.length >= 3) {
+      // Xác định số lượng session dư thừa cần xóa (ví dụ có 3 cái thì cần xóa 1 để thêm 1 mới)
+      const excessCount = activeSessions.length - 3 + 1;
+      const sessionsToRevoke = activeSessions.slice(0, excessCount);
+
+      for (const session of sessionsToRevoke) {
+        operations.push(
+          this.prisma.authSession.update({
+            where: { id: session.id },
+            data: { revokedAt: new Date() },
+          }),
+        );
+      }
+    }
+
+    const tokens = await this.generateTokens(user.id, user.email, user.role);
     const refreshTokenHash = await argon2.hash(tokens.refreshToken);
 
-    const [, updatedUser] = await this.prisma.$transaction([
+    // 3. Đẩy lệnh tạo session mới và update user vào hàng đợi transaction
+    operations.push(
       this.prisma.authSession.create({
         data: { userId: user.id, refreshTokenHash },
       }),
@@ -103,7 +136,13 @@ export class AuthService {
         data: { lastLogin: new Date() },
         select: USER_SELECT,
       }),
-    ]);
+    );
+
+    // Executing tất cả các hành động trong 1 transaction duy nhất
+    const results = await this.prisma.$transaction(operations);
+
+    // Lấy updatedUser từ phần tử cuối cùng của kết quả transaction
+    const updatedUser = results[results.length - 1];
 
     return {
       message: 'Đăng nhập thành công',
@@ -209,5 +248,51 @@ export class AuthService {
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
     };
+  }
+
+  async logout(dto: LogoutDto, id: string) {
+    let payload: { sub: string };
+
+    try {
+      payload = await this.jwtService.verifyAsync<{ sub: string }>(
+        dto.refreshToken,
+        {
+          secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
+        },
+      );
+    } catch {
+      return { message: 'Đăng xuất thành công' };
+    }
+
+    if (payload.sub !== id) {
+      throw new BadRequestException('Yêu cầu đăng xuất không hợp lệ');
+    }
+
+    const sessions = await this.prisma.authSession.findMany({
+      where: {
+        userId: payload.sub,
+        revokedAt: null,
+      },
+      select: {
+        id: true,
+        refreshTokenHash: true,
+      },
+    });
+
+    for (const session of sessions) {
+      const isMatch = await argon2.verify(
+        session.refreshTokenHash,
+        dto.refreshToken,
+      );
+      if (isMatch) {
+        await this.prisma.authSession.update({
+          where: { id: session.id },
+          data: { revokedAt: new Date() },
+        });
+        break;
+      }
+    }
+
+    return { message: 'Đăng xuất thành công' };
   }
 }

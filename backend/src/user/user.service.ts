@@ -39,4 +39,14 @@ export class UserService {
       throw new ConflictException('Email đã tồn tại');
     }
   }
+
+  /*************************************************************
+   * USER
+   *************************************************************/
+
+  async getMe(userId: string) {
+    const user = await this.getUserByIdOrThrow(userId);
+
+    return { message: 'Lấy thông tin người dùng thành công', ...user };
+  }
 }
