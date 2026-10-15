@@ -8,6 +8,7 @@ import { RolesGuard } from './auth/guards/roles.guard';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { APP_GUARD } from '@nestjs/core';
 import { KnowledgeBasesModule } from './knowledge-bases/knowledge-bases.module';
+import { DocumentsModule } from './documents/documents.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { KnowledgeBasesModule } from './knowledge-bases/knowledge-bases.module';
     AuthModule,
     UserModule,
     KnowledgeBasesModule,
+    DocumentsModule,
   ],
   controllers: [AppController],
   providers: [

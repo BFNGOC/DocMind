@@ -8,5 +8,6 @@ import { KnowledgeBasesService } from './knowledge-bases.service';
   imports: [PrismaModule],
   controllers: [KnowledgeBasesController],
   providers: [KnowledgeBasesService],
+  exports: [KnowledgeBasesService],
 })
 export class KnowledgeBasesModule {}

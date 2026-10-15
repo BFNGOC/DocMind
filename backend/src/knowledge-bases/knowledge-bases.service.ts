@@ -59,6 +59,15 @@ export class KnowledgeBasesService {
     return membership;
   }
 
+  async requireMembership(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    knowledgeBaseId: string,
+  ) {
+    await this.lockKnowledgeBase(tx, knowledgeBaseId);
+    return this.findMembership(tx, userId, knowledgeBaseId);
+  }
+
   async create(userId: string, dto: CreateKnowledgeBaseDto) {
     const name = dto.name.trim();
 
