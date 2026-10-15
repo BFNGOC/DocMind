@@ -1,12 +1,8 @@
-import { IsEnum } from 'class-validator';
-
-import { KbMemberRole } from '../../generated/prisma/enums';
+import { IsIn } from 'class-validator';
 
 export class UpdateKnowledgeBaseMemberDto {
-  @IsEnum(KbMemberRole, {
-    message: `Role phải là một trong các giá trị sau: ${Object.values(
-      KbMemberRole,
-    ).join(', ')}`,
+  @IsIn(['ADMIN', 'EDITOR', 'VIEWER'], {
+    message: 'Role phải là ADMIN, EDITOR hoặc VIEWER',
   })
-  role!: KbMemberRole;
+  role!: 'ADMIN' | 'EDITOR' | 'VIEWER';
 }

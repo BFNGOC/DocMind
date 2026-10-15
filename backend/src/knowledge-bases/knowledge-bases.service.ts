@@ -1,11 +1,13 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 
 import { PrismaService } from '../prisma/prisma.service';
+import type { Prisma } from '../generated/prisma/client';
 import { KbMemberRole } from '../generated/prisma/enums';
 import { CreateKnowledgeBaseDto } from './dto/create-knowledge-base.dto';
 import { UpdateKnowledgeBaseDto } from './dto/update-knowledge-base.dto';
@@ -15,8 +17,28 @@ import { AddMembersDto } from './dto/add-knowledge-base-member.dto';
 export class KnowledgeBasesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  private async findMembership(userId: string, knowledgeBaseId: string) {
-    const membership = await this.prisma.knowledgeBaseMember.findUnique({
+  private async lockKnowledgeBase(
+    tx: Prisma.TransactionClient,
+    knowledgeBaseId: string,
+  ) {
+    const knowledgeBases = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id
+      FROM knowledge_bases
+      WHERE id = ${knowledgeBaseId}::uuid
+      FOR UPDATE
+    `;
+
+    if (knowledgeBases.length === 0) {
+      throw new NotFoundException('Knowledge Base không tồn tại');
+    }
+  }
+
+  private async findMembership(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    knowledgeBaseId: string,
+  ) {
+    const membership = await tx.knowledgeBaseMember.findUnique({
       where: {
         knowledgeBaseId_userId: {
           knowledgeBaseId,
@@ -29,7 +51,9 @@ export class KnowledgeBasesService {
     });
 
     if (!membership) {
-      throw new NotFoundException('Knowledge Base không tồn tại');
+      throw new ForbiddenException(
+        'Bạn không phải là thành viên của Knowledge Base này',
+      );
     }
 
     return membership;
@@ -99,73 +123,73 @@ export class KnowledgeBasesService {
   }
 
   async findOne(userId: string, id: string) {
-    const knowledgeBase = await this.prisma.knowledgeBase.findFirst({
-      where: {
-        id,
-        members: {
-          some: { userId },
-        },
-      },
-      select: {
-        id: true,
-        name: true,
-        description: true,
-        createdAt: true,
-        updatedAt: true,
-        members: {
-          select: {
-            userId: true,
-            role: true,
-            createdAt: true,
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockKnowledgeBase(tx, id);
+      await this.findMembership(tx, userId, id);
+
+      const knowledgeBase = await tx.knowledgeBase.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          name: true,
+          description: true,
+          createdAt: true,
+          updatedAt: true,
+          members: {
+            select: {
+              userId: true,
+              role: true,
+              createdAt: true,
+            },
+          },
+          _count: {
+            select: {
+              documents: true,
+              conversations: true,
+            },
           },
         },
-        _count: {
-          select: {
-            documents: true,
-            conversations: true,
-          },
-        },
-      },
+      });
+
+      if (!knowledgeBase) {
+        throw new NotFoundException('Knowledge Base không tồn tại');
+      }
+
+      return knowledgeBase;
     });
-
-    if (!knowledgeBase) {
-      throw new NotFoundException('Knowledge Base không tồn tại');
-    }
-
-    return knowledgeBase;
   }
 
   async update(userId: string, id: string, dto: UpdateKnowledgeBaseDto) {
-    const membership = await this.findMembership(userId, id);
-
-    if (
-      membership.role !== KbMemberRole.OWNER &&
-      membership.role !== KbMemberRole.EDITOR
-    ) {
-      throw new ForbiddenException(
-        'Bạn không có quyền cập nhật Knowledge Base này',
-      );
-    }
-
     if (dto.name !== undefined && !dto.name.trim()) {
       throw new BadRequestException('Tên Knowledge Base không hợp lệ');
     }
 
-    const knowledgeBase = await this.prisma.knowledgeBase.update({
-      where: { id },
-      data: {
-        ...(dto.name !== undefined && { name: dto.name.trim() }),
-        ...(dto.description !== undefined && {
-          description: dto.description?.trim() || null,
-        }),
-      },
-      select: {
-        id: true,
-        name: true,
-        description: true,
-        createdAt: true,
-        updatedAt: true,
-      },
+    const knowledgeBase = await this.prisma.$transaction(async (tx) => {
+      await this.lockKnowledgeBase(tx, id);
+      const membership = await this.findMembership(tx, userId, id);
+
+      if (membership.role === KbMemberRole.VIEWER) {
+        throw new ForbiddenException(
+          'Bạn không có quyền cập nhật Knowledge Base này',
+        );
+      }
+
+      return tx.knowledgeBase.update({
+        where: { id },
+        data: {
+          ...(dto.name !== undefined && { name: dto.name.trim() }),
+          ...(dto.description !== undefined && {
+            description: dto.description?.trim() || null,
+          }),
+        },
+        select: {
+          id: true,
+          name: true,
+          description: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
     });
 
     return {
@@ -175,16 +199,17 @@ export class KnowledgeBasesService {
   }
 
   async remove(userId: string, id: string) {
-    const membership = await this.findMembership(userId, id);
+    await this.prisma.$transaction(async (tx) => {
+      await this.lockKnowledgeBase(tx, id);
+      const membership = await this.findMembership(tx, userId, id);
 
-    if (membership.role !== KbMemberRole.OWNER) {
-      throw new ForbiddenException(
-        'Chỉ người sở hữu mới có quyền xóa Knowledge Base',
-      );
-    }
+      if (membership.role !== KbMemberRole.OWNER) {
+        throw new ForbiddenException(
+          'Chỉ người sở hữu mới có quyền xóa Knowledge Base',
+        );
+      }
 
-    await this.prisma.knowledgeBase.delete({
-      where: { id },
+      await tx.knowledgeBase.delete({ where: { id } });
     });
 
     return {
@@ -193,23 +218,26 @@ export class KnowledgeBasesService {
   }
 
   async findMembers(userId: string, knowledgeBaseId: string) {
-    await this.findMembership(userId, knowledgeBaseId);
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockKnowledgeBase(tx, knowledgeBaseId);
+      await this.findMembership(tx, userId, knowledgeBaseId);
 
-    return this.prisma.knowledgeBaseMember.findMany({
-      where: { knowledgeBaseId },
-      orderBy: { createdAt: 'asc' },
-      select: {
-        userId: true,
-        role: true,
-        createdAt: true,
-        user: {
-          select: {
-            name: true,
-            email: true,
-            avatarUrl: true,
+      return tx.knowledgeBaseMember.findMany({
+        where: { knowledgeBaseId },
+        orderBy: { createdAt: 'asc' },
+        select: {
+          userId: true,
+          role: true,
+          createdAt: true,
+          user: {
+            select: {
+              name: true,
+              email: true,
+              avatarUrl: true,
+            },
           },
         },
-      },
+      });
     });
   }
 
@@ -218,80 +246,104 @@ export class KnowledgeBasesService {
     knowledgeBaseId: string,
     dto: AddMembersDto,
   ) {
-    const operatorMembership = await this.findMembership(
-      userId,
-      knowledgeBaseId,
-    );
-    if (operatorMembership.role !== KbMemberRole.OWNER) {
-      throw new ForbiddenException(
-        'Chỉ người sở hữu mới có quyền thêm thành viên',
+    const allowedRoles = [KbMemberRole.EDITOR, KbMemberRole.VIEWER];
+    if (dto.members.some((member) => !allowedRoles.includes(member.role))) {
+      throw new BadRequestException(
+        'Chỉ được thêm thành viên với role EDITOR hoặc VIEWER',
       );
     }
 
-    const uniqueInputs = dto.members.filter(
-      (member, index, self) =>
-        self.findIndex((m) => m.email === member.email) === index,
-    );
-    const emails = uniqueInputs.map((m) => m.email);
-
-    const existingUsers = await this.prisma.user.findMany({
-      where: { email: { in: emails } },
-      include: {
-        knowledgeBaseMemberships: {
-          where: { knowledgeBaseId },
-        },
-      },
-    });
-
-    const dataToInsert: {
-      knowledgeBaseId: string;
-      userId: string;
-      role: KbMemberRole;
-    }[] = [];
-    const failedList: { email: string; reason: string }[] = [];
-
-    for (const input of uniqueInputs) {
-      const user = existingUsers.find((u) => u.email === input.email);
-
-      if (!user) {
-        failedList.push({
-          email: input.email,
-          reason: 'Người dùng chưa có tài khoản trong hệ thống',
-        });
-        continue;
-      }
-
-      if (user.knowledgeBaseMemberships.length > 0) {
-        failedList.push({
-          email: input.email,
-          reason: 'Người dùng đã là thành viên của KB này từ trước',
-        });
-        continue;
-      }
-
-      dataToInsert.push({
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockKnowledgeBase(tx, knowledgeBaseId);
+      const operatorMembership = await this.findMembership(
+        tx,
+        userId,
         knowledgeBaseId,
-        userId: user.id,
-        role: input.role,
-      });
-    }
+      );
 
-    if (dataToInsert.length > 0) {
-      await this.prisma.knowledgeBaseMember.createMany({
-        data: dataToInsert,
-        skipDuplicates: true,
-      });
-    }
+      if (
+        operatorMembership.role !== KbMemberRole.OWNER &&
+        operatorMembership.role !== KbMemberRole.ADMIN
+      ) {
+        throw new ForbiddenException(
+          'Chỉ OWNER hoặc ADMIN mới có quyền thêm thành viên',
+        );
+      }
 
-    return {
-      message: `Xử lý hoàn tất danh sách thành viên.`,
-      summary: {
-        totalSent: dto.members.length,
-        successCount: dataToInsert.length,
-        failedCount: failedList.length,
-      },
-      failedList: failedList,
-    };
+      const users = await tx.user.findMany({
+        where: { email: { in: dto.members.map((member) => member.email) } },
+        select: {
+          id: true,
+          email: true,
+          knowledgeBaseMemberships: {
+            where: { knowledgeBaseId },
+            select: { id: true },
+          },
+        },
+      });
+      const usersByEmail = new Map(users.map((user) => [user.email, user]));
+      const seenEmails = new Set<string>();
+      const failedList: { email: string; reason: string }[] = [];
+      let successCount = 0;
+
+      for (const input of dto.members) {
+        if (seenEmails.has(input.email)) {
+          failedList.push({
+            email: input.email,
+            reason: 'Email bị trùng trong danh sách gửi lên',
+          });
+          continue;
+        }
+        seenEmails.add(input.email);
+
+        const user = usersByEmail.get(input.email);
+        if (!user) {
+          failedList.push({
+            email: input.email,
+            reason: 'Người dùng chưa có tài khoản trong hệ thống',
+          });
+          continue;
+        }
+
+        if (user.knowledgeBaseMemberships.length > 0) {
+          failedList.push({
+            email: input.email,
+            reason: 'Người dùng đã là thành viên của KB này từ trước',
+          });
+          continue;
+        }
+
+        const result = await tx.knowledgeBaseMember.createMany({
+          data: [
+            {
+              knowledgeBaseId,
+              userId: user.id,
+              role: input.role,
+            },
+          ],
+          skipDuplicates: true,
+        });
+
+        if (result.count === 1) {
+          successCount += 1;
+        } else {
+          failedList.push({
+            email: input.email,
+            reason: 'Người dùng đã là thành viên của KB này từ trước',
+          });
+        }
+      }
+
+      return {
+        message: 'Xử lý hoàn tất danh sách thành viên.',
+        summary: {
+          totalSent: dto.members.length,
+          successCount,
+          failedCount: failedList.length,
+        },
+        failedList,
+      };
+    });
   }
 
   async updateMemberRole(
@@ -300,45 +352,75 @@ export class KnowledgeBasesService {
     targetMemberId: string,
     newRole: KbMemberRole,
   ) {
-    if (userId === targetMemberId) {
-      throw new BadRequestException(
-        'Bạn không thể tự thay đổi quyền của chính mình',
-      );
+    if (
+      newRole !== KbMemberRole.ADMIN &&
+      newRole !== KbMemberRole.EDITOR &&
+      newRole !== KbMemberRole.VIEWER
+    ) {
+      throw new BadRequestException('Role phải là ADMIN, EDITOR hoặc VIEWER');
     }
 
-    const operatorMembership = await this.findMembership(
-      userId,
-      knowledgeBaseId,
-    );
-    if (operatorMembership.role !== KbMemberRole.OWNER) {
-      throw new ForbiddenException(
-        'Chỉ người sở hữu mới có quyền thay đổi vai trò thành viên',
+    const member = await this.prisma.$transaction(async (tx) => {
+      await this.lockKnowledgeBase(tx, knowledgeBaseId);
+      const operatorMembership = await this.findMembership(
+        tx,
+        userId,
+        knowledgeBaseId,
       );
-    }
 
-    const targetMembership = await this.prisma.knowledgeBaseMember.findUnique({
-      where: {
-        knowledgeBaseId_userId: { knowledgeBaseId, userId: targetMemberId },
-      },
-    });
+      if (
+        operatorMembership.role !== KbMemberRole.OWNER &&
+        operatorMembership.role !== KbMemberRole.ADMIN
+      ) {
+        throw new ForbiddenException(
+          'Bạn không có quyền thay đổi vai trò thành viên',
+        );
+      }
 
-    if (!targetMembership) {
-      throw new NotFoundException(
-        'Thành viên này không tồn tại trong Knowledge Base',
-      );
-    }
+      if (userId === targetMemberId) {
+        throw new BadRequestException(
+          'Bạn không thể tự thay đổi quyền của chính mình',
+        );
+      }
 
-    if (targetMembership.role === KbMemberRole.OWNER) {
-      throw new ForbiddenException(
-        'Bạn không thể thay đổi vai trò của một người sở hữu khác',
-      );
-    }
+      const targetMembership = await tx.knowledgeBaseMember.findUnique({
+        where: {
+          knowledgeBaseId_userId: { knowledgeBaseId, userId: targetMemberId },
+        },
+      });
 
-    const member = await this.prisma.knowledgeBaseMember.update({
-      where: {
-        knowledgeBaseId_userId: { knowledgeBaseId, userId: targetMemberId },
-      },
-      data: { role: newRole },
+      if (!targetMembership) {
+        throw new NotFoundException(
+          'Thành viên này không tồn tại trong Knowledge Base',
+        );
+      }
+
+      if (
+        targetMembership.role === KbMemberRole.OWNER ||
+        (operatorMembership.role === KbMemberRole.ADMIN &&
+          targetMembership.role === KbMemberRole.ADMIN)
+      ) {
+        throw new ForbiddenException(
+          'Bạn không có quyền thay đổi vai trò thành viên này',
+        );
+      }
+
+      if (
+        operatorMembership.role === KbMemberRole.ADMIN &&
+        newRole !== KbMemberRole.EDITOR &&
+        newRole !== KbMemberRole.VIEWER
+      ) {
+        throw new ForbiddenException(
+          'ADMIN chỉ được chuyển role giữa EDITOR và VIEWER',
+        );
+      }
+
+      return tx.knowledgeBaseMember.update({
+        where: {
+          knowledgeBaseId_userId: { knowledgeBaseId, userId: targetMemberId },
+        },
+        data: { role: newRole },
+      });
     });
 
     return {
@@ -352,73 +434,158 @@ export class KnowledgeBasesService {
     knowledgeBaseId: string,
     targetMemberId: string,
   ) {
-    const operatorMembership = await this.findMembership(
-      userId,
-      knowledgeBaseId,
-    );
+    const selfRemoval = userId === targetMemberId;
 
-    if (userId === targetMemberId) {
-      if (operatorMembership.role === KbMemberRole.OWNER) {
-        const otherOwner = await this.prisma.knowledgeBaseMember.findFirst({
+    await this.prisma.$transaction(async (tx) => {
+      await this.lockKnowledgeBase(tx, knowledgeBaseId);
+      const operatorMembership = await this.findMembership(
+        tx,
+        userId,
+        knowledgeBaseId,
+      );
+
+      if (selfRemoval) {
+        if (operatorMembership.role === KbMemberRole.OWNER) {
+          throw new BadRequestException(
+            'OWNER không thể rời Knowledge Base trước khi chuyển quyền sở hữu',
+          );
+        }
+
+        await tx.knowledgeBaseMember.delete({
           where: {
-            knowledgeBaseId,
-            role: KbMemberRole.OWNER,
-            NOT: {
-              userId: userId,
+            knowledgeBaseId_userId: {
+              knowledgeBaseId,
+              userId: targetMemberId,
             },
           },
         });
-
-        if (!otherOwner) {
-          throw new BadRequestException(
-            'Bạn là người sở hữu duy nhất còn lại. Vui lòng chuyển quyền OWNER cho thành viên khác trước khi rời nhóm.',
-          );
-        }
+        return;
       }
 
-      await this.prisma.knowledgeBaseMember.delete({
+      if (
+        operatorMembership.role !== KbMemberRole.OWNER &&
+        operatorMembership.role !== KbMemberRole.ADMIN
+      ) {
+        throw new ForbiddenException(
+          'Bạn không có quyền xóa thành viên khỏi Knowledge Base',
+        );
+      }
+
+      const targetMembership = await tx.knowledgeBaseMember.findUnique({
         where: {
           knowledgeBaseId_userId: { knowledgeBaseId, userId: targetMemberId },
         },
       });
 
-      return {
-        message: 'Rời khỏi Knowledge Base thành công',
-      };
-    }
+      if (!targetMembership) {
+        throw new NotFoundException(
+          'Thành viên này không tồn tại trong Knowledge Base',
+        );
+      }
 
-    if (operatorMembership.role !== KbMemberRole.OWNER) {
-      throw new ForbiddenException(
-        'Chỉ người sở hữu mới có quyền xóa thành viên',
-      );
-    }
+      if (operatorMembership.role === KbMemberRole.ADMIN) {
+        if (
+          targetMembership.role !== KbMemberRole.EDITOR &&
+          targetMembership.role !== KbMemberRole.VIEWER
+        ) {
+          throw new ForbiddenException(
+            'ADMIN chỉ được xóa thành viên có role EDITOR hoặc VIEWER',
+          );
+        }
+      } else if (
+        operatorMembership.role !== KbMemberRole.OWNER ||
+        targetMembership.role === KbMemberRole.OWNER
+      ) {
+        throw new ForbiddenException('Bạn không có quyền xóa thành viên này');
+      }
 
-    const targetMembership = await this.prisma.knowledgeBaseMember.findUnique({
-      where: {
-        knowledgeBaseId_userId: { knowledgeBaseId, userId: targetMemberId },
-      },
-    });
-
-    if (!targetMembership) {
-      throw new NotFoundException(
-        'Thành viên này không tồn tại trong Knowledge Base',
-      );
-    }
-
-    if (targetMembership.role === KbMemberRole.OWNER) {
-      throw new ForbiddenException(
-        'Bạn không thể xóa một người sở hữu khác khỏi Knowledge Base',
-      );
-    }
-
-    await this.prisma.knowledgeBaseMember.delete({
-      where: {
-        knowledgeBaseId_userId: { knowledgeBaseId, userId: targetMemberId },
-      },
+      await tx.knowledgeBaseMember.delete({
+        where: {
+          knowledgeBaseId_userId: { knowledgeBaseId, userId: targetMemberId },
+        },
+      });
     });
 
     return {
-      message: 'Xóa thành viên khỏi Knowledge Base thành công',
+      message: selfRemoval
+        ? 'Rời khỏi Knowledge Base thành công'
+        : 'Xóa thành viên khỏi Knowledge Base thành công',
+    };
+  }
+
+  async transferOwnership(
+    userId: string,
+    knowledgeBaseId: string,
+    targetMemberId: string,
+  ) {
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await this.lockKnowledgeBase(tx, knowledgeBaseId);
+        const operatorMembership = await this.findMembership(
+          tx,
+          userId,
+          knowledgeBaseId,
+        );
+
+        if (operatorMembership.role !== KbMemberRole.OWNER) {
+          throw new ForbiddenException(
+            'Chỉ OWNER hiện tại mới có thể chuyển quyền sở hữu',
+          );
+        }
+
+        if (userId === targetMemberId) {
+          throw new BadRequestException(
+            'Bạn không thể chuyển quyền sở hữu cho chính mình',
+          );
+        }
+
+        const targetMembership = await tx.knowledgeBaseMember.findUnique({
+          where: {
+            knowledgeBaseId_userId: {
+              knowledgeBaseId,
+              userId: targetMemberId,
+            },
+          },
+        });
+
+        if (!targetMembership) {
+          throw new NotFoundException(
+            'Người nhận phải là thành viên của Knowledge Base này',
+          );
+        }
+
+        await tx.knowledgeBaseMember.update({
+          where: {
+            knowledgeBaseId_userId: { knowledgeBaseId, userId },
+          },
+          data: { role: KbMemberRole.ADMIN },
+        });
+        await tx.knowledgeBaseMember.update({
+          where: {
+            knowledgeBaseId_userId: {
+              knowledgeBaseId,
+              userId: targetMemberId,
+            },
+          },
+          data: { role: KbMemberRole.OWNER },
+        });
+      });
+    } catch (error) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          'Không thể hoàn tất chuyển quyền sở hữu do trạng thái thành viên đã thay đổi',
+        );
+      }
+      throw error;
+    }
+
+    return {
+      message: 'Chuyển quyền sở hữu Knowledge Base thành công',
     };
   }
 }

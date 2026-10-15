@@ -20,6 +20,7 @@ enum UserRole {
 
 enum KbMemberRole {
   OWNER
+  ADMIN
   EDITOR
   VIEWER
 

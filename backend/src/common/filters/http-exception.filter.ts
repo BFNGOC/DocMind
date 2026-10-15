@@ -38,8 +38,6 @@ export class HttpExceptionFilter implements ExceptionFilter {
           ? (exceptionResponse as any).message.join(', ') // Gộp mảng lỗi Validation thành 1 chuỗi
           : (exceptionResponse as any).message;
       }
-    } else if (exception instanceof Error) {
-      message = exception.message;
     }
 
     // Ghi log lỗi lại trên console của Backend để Dev dễ check

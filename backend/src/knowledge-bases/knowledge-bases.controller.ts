@@ -19,6 +19,7 @@ import { KnowledgeBasesService } from './knowledge-bases.service';
 import type { AuthUser } from 'src/auth/types/auth-jwt-user.type';
 import { AddMembersDto } from './dto/add-knowledge-base-member.dto';
 import { UpdateKnowledgeBaseMemberDto } from './dto/update-knowledge-base-member.dto';
+import { TransferKnowledgeBaseOwnershipDto } from './dto/transfer-knowledge-base-ownership.dto';
 
 @Controller('knowledge-bases')
 @UseGuards(JwtAuthGuard)
@@ -70,7 +71,7 @@ export class KnowledgeBasesController {
 
   @Post(':id/members')
   addMembers(
-    @Param('id') knowledgeBaseId: string,
+    @Param('id', ParseUUIDPipe) knowledgeBaseId: string,
     @CurrentUser() user: AuthUser,
     @Body() addMembersDto: AddMembersDto,
   ) {
@@ -78,6 +79,19 @@ export class KnowledgeBasesController {
       user.id,
       knowledgeBaseId,
       addMembersDto,
+    );
+  }
+
+  @Patch(':id/owner')
+  transferOwnership(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: TransferKnowledgeBaseOwnershipDto,
+  ) {
+    return this.knowledgeBasesService.transferOwnership(
+      user.id,
+      id,
+      dto.memberId,
     );
   }
 

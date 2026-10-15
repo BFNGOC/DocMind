@@ -1,23 +1,20 @@
 import {
   IsEmail,
-  IsEnum,
+  IsIn,
   IsArray,
   ValidateNested,
   ArrayMinSize,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { KbMemberRole } from 'src/generated/prisma/enums';
 
 export class MemberItemDto {
   @IsEmail({}, { message: 'Email không đúng định dạng' })
   email!: string;
 
-  @IsEnum(KbMemberRole, {
-    message: `Role phải là một trong các giá trị sau: ${Object.values(
-      KbMemberRole,
-    ).join(', ')}`,
+  @IsIn(['EDITOR', 'VIEWER'], {
+    message: 'Role khi thêm thành viên chỉ được là EDITOR hoặc VIEWER',
   })
-  role!: KbMemberRole;
+  role!: 'EDITOR' | 'VIEWER';
 }
 
 export class AddMembersDto {
