@@ -35,6 +35,16 @@ Kiểm tra xem file `schema.prisma` có viết đúng cú pháp không mà khôn
 npx prisma validate --config prisma7.config.ts
 ```
 
+### 🔹 Áp dụng migration đã có mà không tạo migration mới
+
+```bash
+npx prisma migrate deploy --config prisma7.config.ts
+```
+
+- Dùng lệnh này để áp dụng migration đã được review; không reset database và không tạo migration mới.
+- Migration `20261015110000_enforce_knowledge_base_owner` có partial unique index và deferred trigger riêng của PostgreSQL để bảo đảm mỗi Knowledge Base có đúng một OWNER. Giữ nguyên các câu lệnh SQL này trong lịch sử migration.
+- Migration sẽ dừng an toàn nếu dữ liệu hiện tại có Knowledge Base không có đúng một OWNER; cần kiểm tra và xử lý dữ liệu trước khi chạy lại.
+
 ---
 
 ## 🗂️ 2. Nhóm Lệnh Đồng Bộ Ngược (Khi Database đã có sẵn bảng)

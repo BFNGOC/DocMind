@@ -1,13 +1,16 @@
 generator client {
   provider = "prisma-client"
   output   = "../src/generated/prisma"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
   provider = "postgresql"
+  extensions = [vector]       
 }
 
-// ================================== ENUM ==================================
+// ================================== ENUMS ==================================
+
 enum UserRole {
   USER
   ADMIN
@@ -15,22 +18,54 @@ enum UserRole {
   @@map("user_role")
 }
 
-// ================================== MODEL ==================================
+enum KbMemberRole {
+  OWNER
+  ADMIN
+  EDITOR
+  VIEWER
+
+  @@map("kb_member_role")
+}
+
+enum DocumentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+
+  @@map("document_status")
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+
+  @@map("message_role")
+}
+
+// ================================== USERS ==================================
+
 model User {
-  id           String   @id @default(uuid()) @db.Uuid
-  email        String   @unique @db.VarChar(255)
-  passwordHash String   @map("password_hash") @db.Text
-  name         String   @db.VarChar(100)
-  role         UserRole @default(USER)
-  avatarUrl    String?  @map("avatar_url") @db.Text
+  id           String    @id @default(uuid()) @db.Uuid
+  email        String    @unique @db.VarChar(255)
+  passwordHash String    @map("password_hash") @db.Text
+  name         String    @db.VarChar(100)
+  role         UserRole  @default(USER)
+  avatarUrl    String?   @map("avatar_url") @db.Text
   lastLogin    DateTime? @map("last_login") @db.Timestamptz(6)
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  
-  authSessions AuthSession[]
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  authSessions            AuthSession[]
+  knowledgeBaseMemberships KnowledgeBaseMember[]
+  uploadedDocuments       Document[] @relation("DocumentUploader")
+  conversations           Conversation[]
+  aiUsages                AiUsage[]
 
   @@map("users")
 }
+
+// ================================ AUTH SESSIONS ================================
 
 model AuthSession {
   id               String    @id @default(uuid()) @db.Uuid
@@ -44,4 +79,139 @@ model AuthSession {
   @@index([userId])
   @@index([refreshTokenHash])
   @@map("auth_sessions")
+}
+
+// ============================== KNOWLEDGE BASES ==============================
+
+model KnowledgeBase {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @db.VarChar(150)
+  description String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  members       KnowledgeBaseMember[]
+  documents     Document[]
+  conversations Conversation[]
+  aiUsages      AiUsage[]
+
+  @@map("knowledge_bases")
+}
+
+model KnowledgeBaseMember {
+  id              String      @id @default(uuid()) @db.Uuid
+  knowledgeBaseId String      @map("knowledge_base_id") @db.Uuid
+  userId          String      @map("user_id") @db.Uuid
+  role            KbMemberRole
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  knowledgeBase KnowledgeBase @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([knowledgeBaseId, userId])
+  @@index([userId])
+  @@map("knowledge_base_members")
+}
+
+// ================================= DOCUMENTS =================================
+
+model Document {
+  id              String         @id @default(uuid()) @db.Uuid
+  knowledgeBaseId String         @map("knowledge_base_id") @db.Uuid
+  uploadedBy      String         @map("uploaded_by") @db.Uuid
+  name            String         @db.VarChar(255)
+  fileKey         String         @map("file_key") @db.Text
+  fileSize        BigInt         @map("file_size")
+  mimeType        String         @map("mime_type") @db.VarChar(100)
+  fileHash        String         @map("file_hash") @db.VarChar(64)
+  status          DocumentStatus @default(PENDING)
+  errorMessage    String?        @map("error_message") @db.Text
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  knowledgeBase KnowledgeBase  @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  uploader      User           @relation("DocumentUploader", fields: [uploadedBy], references: [id], onDelete: Restrict)
+  chunks        DocumentChunk[]
+
+  @@unique([knowledgeBaseId, fileHash])
+  @@index([knowledgeBaseId])
+  @@index([knowledgeBaseId, status])
+  @@map("documents")
+}
+
+// ============================== DOCUMENT CHUNKS ==============================
+
+model DocumentChunk {
+  id         String   @id @default(uuid()) @db.Uuid
+  documentId String   @map("document_id") @db.Uuid
+  chunkIndex Int      @map("chunk_index")
+  content    String   @db.Text
+  embedding  Unsupported("vector(1536)")?
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, chunkIndex])
+  @@map("document_chunks")
+}
+
+// ================================ CONVERSATIONS ================================
+
+model Conversation {
+  id              String   @id @default(uuid()) @db.Uuid
+  knowledgeBaseId String   @map("knowledge_base_id") @db.Uuid
+  userId          String   @map("user_id") @db.Uuid
+  title           String   @default("New conversation") @db.VarChar(255)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  knowledgeBase KnowledgeBase @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages      Message[]
+  aiUsages      AiUsage[]
+
+  @@index([knowledgeBaseId])
+  @@index([userId])
+  @@index([knowledgeBaseId, updatedAt])
+  @@map("conversations")
+}
+
+// ================================== MESSAGES ==================================
+
+model Message {
+  id             String      @id @default(uuid()) @db.Uuid
+  conversationId String      @map("conversation_id") @db.Uuid
+  role           MessageRole
+  content        String      @db.Text
+  sources        Json?
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+// ================================== AI USAGE ==================================
+
+model AiUsage {
+  id             String   @id @default(uuid()) @db.Uuid
+  userId         String   @map("user_id") @db.Uuid
+  knowledgeBaseId String  @map("knowledge_base_id") @db.Uuid
+  conversationId String?  @map("conversation_id") @db.Uuid
+  model          String   @db.VarChar(100)
+  promptTokens   Int      @default(0) @map("prompt_tokens")
+  completionTokens Int    @default(0) @map("completion_tokens")
+  totalTokens    Int      @default(0) @map("total_tokens")
+  estimatedCost  Decimal  @default(0) @map("estimated_cost") @db.Decimal(12, 6)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  knowledgeBase KnowledgeBase @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([knowledgeBaseId])
+  @@index([conversationId])
+  @@map("ai_usage")
 }
