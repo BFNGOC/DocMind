@@ -28,6 +28,8 @@ const navigation = [
     { href: '/chat', label: 'Hỏi đáp AI', icon: <RobotOutlined /> },
 ];
 
+const documentsHref = '/knowledge-bases/75c258e7-35f2-487b-b7ad-28e5935384cd';
+
 export function AppShell({
     children,
     breadcrumb,
@@ -38,18 +40,15 @@ export function AppShell({
     const pathname = usePathname();
     const [menuOpen, setMenuOpen] = useState(false);
     const totalBytes = mockDocuments.reduce((sum, document) => sum + Number(document.fileSize), 0);
-
-    function isActive(href: string) {
-        if (href === '/') {
-            return pathname === '/';
-        }
-
-        if (href === '/knowledge-bases/75c258e7-35f2-487b-b7ad-28e5935384cd') {
-            return pathname.startsWith('/knowledge-bases/');
-        }
-
-        return pathname === href || pathname.startsWith(`${href}/`);
-    }
+    const activeHref = pathname === '/'
+        ? '/'
+        : pathname === '/knowledge-bases'
+            ? '/knowledge-bases'
+            : pathname.startsWith('/knowledge-bases/')
+                ? documentsHref
+                : pathname === '/chat' || pathname.startsWith('/chat/')
+                    ? '/chat'
+                    : null;
 
     return (
         <div className="workspace">
@@ -66,8 +65,8 @@ export function AppShell({
                 <nav aria-label="Điều hướng chính" className="side-nav">
                     {navigation.map((item) => (
                         <Link
-                            aria-current={isActive(item.href) ? 'page' : undefined}
-                            className={`side-nav-link ${isActive(item.href) ? 'active' : ''}`}
+                            aria-current={activeHref === item.href ? 'page' : undefined}
+                            className={`side-nav-link ${activeHref === item.href ? 'active' : ''}`}
                             href={item.href}
                             key={item.href}
                             onClick={() => setMenuOpen(false)}
