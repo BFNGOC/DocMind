@@ -1,5 +1,5 @@
-import AuthPage from '@/features/auth/components/AuthPage';
+import AuthPage from "@/features/auth/components/AuthPage";
 
 export default function LoginPage() {
-    return <AuthPage mode="login" />;
+  return <AuthPage mode="login" />;
 }

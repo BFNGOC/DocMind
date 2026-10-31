@@ -1,33 +1,33 @@
-import type { ApiResponse } from '@/shared/types/api-response.types';
+import type { ApiResponse } from "@/shared/types/api-response.types";
 
-export type UserRole = 'USER' | 'ADMIN';
+export type UserRole = "USER" | "ADMIN";
 
 export interface PublicUser {
-    id: string;
-    email: string;
-    name: string;
-    role: UserRole;
-    avatarUrl: string | null;
-    lastLogin: string | null;
-    createdAt: string;
-    updatedAt: string;
+  id: string;
+  email: string;
+  name: string;
+  role: UserRole;
+  avatarUrl: string | null;
+  lastLogin: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface LoginRequest {
-    email: string;
-    password: string;
+  email: string;
+  password: string;
 }
 
 export interface RegisterRequest {
-    name: string;
-    email: string;
-    password: string;
+  name: string;
+  email: string;
+  password: string;
 }
 
 export interface LoginResponseData {
-    accessToken: string;
-    refreshToken: string;
-    user: PublicUser;
+  accessToken: string;
+  refreshToken: string;
+  user: PublicUser;
 }
 
 export type CurrentUserResponse = ApiResponse<PublicUser>;

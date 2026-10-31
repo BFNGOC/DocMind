@@ -1,5 +1,5 @@
-import KnowledgeBaseListPage from '@/features/knowledge-bases/components/KnowledgeBaseListPage';
+import KnowledgeBaseListPage from "@/features/knowledge-bases/components/KnowledgeBaseListPage";
 
 export default function Page() {
-    return <KnowledgeBaseListPage />;
+  return <KnowledgeBaseListPage />;
 }
