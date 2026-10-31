@@ -1,0 +1,113 @@
+name: CI
+
+on:
+    pull_request:
+        branches:
+            - dev
+            - main
+
+permissions:
+    contents: read
+    pull-requests: read
+
+jobs:
+    changes:
+        runs-on: ubuntu-latest
+        outputs:
+            frontend: ${{ steps.filter.outputs.frontend }}
+            backend: ${{ steps.filter.outputs.backend }}
+
+        steps:
+            - name: Check changed files
+              uses: dorny/paths-filter@v3
+              id: filter
+              with:
+                  filters: |
+                      frontend:
+                        - 'frontend/**'
+                      backend:
+                        - 'backend/**'
+
+    frontend-check:
+        needs: changes
+        if: needs.changes.outputs.frontend == 'true'
+        runs-on: ubuntu-latest
+
+        defaults:
+            run:
+                working-directory: frontend
+
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: npm
+                  cache-dependency-path: frontend/package-lock.json
+
+            - run: npm ci
+            - run: npm run format:check
+            - run: npm run lint
+            - run: npm run build
+
+    backend-check:
+        needs: changes
+        if: needs.changes.outputs.backend == 'true'
+        runs-on: ubuntu-latest
+
+        defaults:
+            run:
+                working-directory: backend
+
+        env:
+            DATABASE_URL: postgresql://docmind:123456@localhost:5432/docmind?schema=public
+
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: npm
+                  cache-dependency-path: backend/package-lock.json
+
+            - run: npm ci
+            - run: npm run format:check
+            - run: npm run db:gen
+            - run: npm run lint
+            - run: npx prisma validate
+            - run: npm run build
+
+    ci-gate:
+        name: ci-gate
+        needs:
+            - changes
+            - frontend-check
+            - backend-check
+        if: always()
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Check CI results
+              env:
+                  CHANGES_RESULT: ${{ needs.changes.result }}
+                  FRONTEND_RESULT: ${{ needs.frontend-check.result }}
+                  BACKEND_RESULT: ${{ needs.backend-check.result }}
+              run: |
+                  if [[ "$CHANGES_RESULT" != "success" ]]; then
+                    echo "Change detection failed"
+                    exit 1
+                  fi
+
+                  if [[ "$FRONTEND_RESULT" == "failure" || "$FRONTEND_RESULT" == "cancelled" ]]; then
+                    echo "Frontend CI failed"
+                    exit 1
+                  fi
+
+                  if [[ "$BACKEND_RESULT" == "failure" || "$BACKEND_RESULT" == "cancelled" ]]; then
+                    echo "Backend CI failed"
+                    exit 1
+                  fi
+
+                  echo "All required checks passed"
